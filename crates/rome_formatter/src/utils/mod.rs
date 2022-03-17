@@ -522,7 +522,7 @@ impl TemplateElement {
 /// precedence, then the node can change its formatting.
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
 pub(crate) enum FormatPrecedence {
-    /// No precedence given to these nodes  
+    /// No precedence given to these nodes
     None,
 
     /// Low priority

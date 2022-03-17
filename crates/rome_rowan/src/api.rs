@@ -33,15 +33,17 @@ pub enum TriviaPiece {
     Newline(TextSize),        // length
     Whitespace(TextSize),     // length
     Comments(TextSize, bool), // length, has_newline
+    Skipped(TextSize),        // length
 }
 
 impl TriviaPiece {
     #[inline]
     pub fn text_len(&self) -> TextSize {
         match self {
-            TriviaPiece::Newline(n) => *n,
-            TriviaPiece::Whitespace(n) => *n,
-            TriviaPiece::Comments(n, _) => *n,
+            TriviaPiece::Newline(n)
+            | TriviaPiece::Whitespace(n)
+            | TriviaPiece::Comments(n, _)
+            | TriviaPiece::Skipped(n) => *n,
         }
     }
 }
@@ -49,6 +51,7 @@ impl TriviaPiece {
 pub struct SyntaxTriviaPieceNewline<L: Language>(SyntaxTriviaPiece<L>);
 pub struct SyntaxTriviaPieceWhitespace<L: Language>(SyntaxTriviaPiece<L>);
 pub struct SyntaxTriviaPieceComments<L: Language>(SyntaxTriviaPiece<L>);
+pub struct SyntaxTriviaPieceSkipped<L: Language>(SyntaxTriviaPiece<L>);
 
 impl<L: Language> SyntaxTriviaPieceNewline<L> {
     pub fn text(&self) -> &str {
@@ -96,6 +99,20 @@ impl<L: Language> SyntaxTriviaPieceComments<L> {
             TriviaPiece::Comments(_, has_newline) => has_newline,
             _ => unreachable!("trivia is not a comment"),
         }
+    }
+}
+
+impl<L: Language> SyntaxTriviaPieceSkipped<L> {
+    pub fn text(&self) -> &str {
+        self.0.text()
+    }
+
+    pub fn text_len(&self) -> TextSize {
+        self.0.text_len()
+    }
+
+    pub fn text_range(&self) -> TextRange {
+        self.0.text_range()
     }
 }
 
@@ -258,6 +275,11 @@ impl<L: Language> SyntaxTriviaPiece<L> {
         matches!(self.trivia, TriviaPiece::Comments(..))
     }
 
+    /// Returns true if this trivia piece is a [SyntaxTriviaPieceSkipped].
+    pub fn is_skipped(&self) -> bool {
+        matches!(self.trivia, TriviaPiece::Skipped(..))
+    }
+
     /// Cast this trivia piece to [SyntaxTriviaPieceNewline].
     ///
     /// ```
@@ -335,6 +357,13 @@ impl<L: Language> SyntaxTriviaPiece<L> {
     pub fn as_comments(&self) -> Option<SyntaxTriviaPieceComments<L>> {
         match &self.trivia {
             TriviaPiece::Comments(..) => Some(SyntaxTriviaPieceComments(self.clone())),
+            _ => None,
+        }
+    }
+
+    pub fn as_skipped(&self) -> Option<SyntaxTriviaPieceSkipped<L>> {
+        match &self.trivia {
+            TriviaPiece::Skipped(..) => Some(SyntaxTriviaPieceSkipped(self.clone())),
             _ => None,
         }
     }
@@ -426,6 +455,7 @@ fn print_debug_trivia_piece<L: Language>(
         TriviaPiece::Newline(_) => write!(f, "Newline(")?,
         TriviaPiece::Whitespace(_) => write!(f, "Whitespace(")?,
         TriviaPiece::Comments(..) => write!(f, "Comments(")?,
+        TriviaPiece::Skipped(..) => write!(f, "Skipped(")?,
     }
     print_debug_str(piece.text(), f)?;
     write!(f, ")")

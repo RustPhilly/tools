@@ -14,6 +14,7 @@ pub enum TriviaKind {
     Whitespace,
     Comment,
     MultilineComment,
+    Skipped,
 }
 
 impl TriviaKind {
@@ -291,6 +292,26 @@ impl<'l> TokenSource<'l> {
             }
 
             self.next_non_trivia_token(context, false)
+        }
+    }
+
+    /// Skips the current token as skipped token trivia
+    pub fn skip_as_trivia(&mut self, context: LexContext) -> Vec<Diagnostic> {
+        if self.current() == EOF {
+            vec![]
+        } else {
+            if !context.is_regular() {
+                self.lookahead_offset = 0;
+                self.non_trivia_lookahead.clear();
+            }
+
+            self.trivia_list.push(Trivia::new(
+                TriviaKind::Skipped,
+                self.current_range(),
+                false,
+            ));
+
+            self.next_non_trivia_token(context, true)
         }
     }
 

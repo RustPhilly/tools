@@ -1,10 +1,11 @@
 use crate::formatter::TriviaPrintMode;
 use crate::utils::has_formatter_suppressions;
-use crate::Token;
 use crate::{
     empty_element, format_elements, FormatElement, FormatResult, Formatter, ToFormatElement,
 };
-use rome_js_syntax::{AstNode, SyntaxResult, SyntaxToken};
+use crate::{FormatError, Token};
+use rome_js_syntax::{AstNode, SyntaxNodeExt, SyntaxResult, SyntaxToken};
+use std::hash::Hash;
 
 /// Utility trait used to simplify the formatting of optional tokens
 pub trait FormatOptionalTokenAndNode {
@@ -281,6 +282,11 @@ impl<N: AstNode + ToFormatElement> FormatTokenAndNode for N {
         WithResult: IntoFormatResult,
     {
         let node = self.syntax();
+
+        if node.has_skipped() {
+            return Ok(formatter.format_verbatim(node));
+        }
+
         let element = if has_formatter_suppressions(node) {
             formatter.format_suppressed(node)
         } else {

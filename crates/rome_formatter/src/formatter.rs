@@ -350,8 +350,8 @@ impl Formatter {
         // Create an enumerated, peekable iterator over the leading trivia pieces for this token
         let mut pieces = token.leading_trivia().pieces().enumerate().peekable();
 
-        // Peek at the next trivia piece, stopping at if it is a comment and
-        // advancing the iterator if its not
+        // Peek at the next trivia piece, stopping if it is a comment and
+        // advancing the iterator if it's not
         while let Some((index, piece)) = pieces.peek() {
             if piece.is_comments() {
                 // Save the index and break the loop

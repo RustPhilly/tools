@@ -112,6 +112,7 @@ impl<'a> LosslessTreeSink<'a> {
                 TriviaKind::Whitespace => TriviaPiece::Whitespace(trivia.len()),
                 TriviaKind::Comment => TriviaPiece::Comments(trivia.len(), false),
                 TriviaKind::MultilineComment => TriviaPiece::Comments(trivia.len(), true),
+                TriviaKind::Skipped => TriviaPiece::Skipped(trivia.len()),
             };
 
             self.trivia_pieces.push(current_trivia);

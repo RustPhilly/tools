@@ -4,14 +4,19 @@ mod statement;
 pub mod ts_parse_error;
 mod types;
 
-use crate::parser::expected_token_any;
-use crate::syntax::expr::{parse_identifier, parse_unary_expr, ExpressionContext};
+use crate::parser::{expected_token, expected_token_any};
+use crate::syntax::expr::{parse_identifier, parse_lhs_expr, parse_unary_expr, ExpressionContext};
 use crate::syntax::js_parse_error::expected_expression;
 
-use crate::syntax::typescript::ts_parse_error::expected_ts_type;
-use crate::{Absent, CompletedMarker, Marker, ParsedSyntax, Parser, Present};
+use crate::syntax::auxiliary::parse_declaration_clause;
+use crate::syntax::module::parse_export;
+use crate::syntax::stmt::parse_non_top_level_export;
+use crate::syntax::typescript::ts_parse_error::{expected_ts_type, ts_only_syntax_error};
+use crate::JsSyntaxFeature::TypeScript;
+use crate::{Absent, CompletedMarker, Marker, ParsedSyntax, Parser, Present, SyntaxFeature};
 use rome_js_syntax::{JsSyntaxKind::*, *};
 use rome_rowan::SyntaxKind;
+use rslint_lexer::LexContext;
 
 pub(crate) use self::statement::*;
 use self::ts_parse_error::ts_member_cannot_be;
@@ -230,5 +235,54 @@ fn eat_members_separator(p: &mut Parser, parent: MemberParent) {
             }
             p.error(expected_token_any(&tokens));
         }
+    }
+}
+
+// test ts ts_class_decorator
+// function test() {}
+// @test
+// class Test {}
+// @test.a?.c @test @test
+// class Test2{}
+// @test export class Test {}
+// @test export default class Test {}
+
+pub(crate) fn skip_ts_decorators(p: &mut Parser) {
+    if !p.at(T![@]) {
+        return;
+    }
+
+    let checkpoint = p.checkpoint();
+    let old_speculative = p.state.speculative_parsing;
+    p.state.speculative_parsing = true;
+
+    while p.at(T![@]) {
+        parse_decorator(p);
+    }
+
+    p.state.speculative_parsing = old_speculative;
+
+    let end_pos = p.tokens.position();
+
+    p.rewind(checkpoint);
+
+    while p.tokens.position() < end_pos {
+        p.tokens.skip_as_trivia(LexContext::default());
+    }
+
+    assert_eq!(p.tokens.position(), end_pos);
+}
+
+fn parse_decorator(p: &mut Parser) -> ParsedSyntax {
+    if p.at(T![@]) {
+        let m = p.start();
+        p.bump(T![@]);
+
+        parse_lhs_expr(p, ExpressionContext::default().and_in_ts_decorator(true))
+            .or_add_diagnostic(p, expected_expression);
+
+        Present(m.complete(p, TS_DECORATOR))
+    } else {
+        Absent
     }
 }

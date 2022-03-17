@@ -1,6 +1,7 @@
 //! Extra utlities for untyped syntax nodes, syntax tokens, and AST nodes.
 
 use crate::{AstNode, JsSyntaxKind, NodeOrToken, SyntaxElement, SyntaxNode, SyntaxToken};
+use rome_rowan::Language;
 
 /// Extensions to rowan's SyntaxNode
 pub trait SyntaxNodeExt {
@@ -69,6 +70,19 @@ pub trait SyntaxNodeExt {
         self.tokens()
             .iter()
             .any(|tok| tok.has_trailing_comments() || tok.has_leading_comments())
+    }
+
+    fn has_skipped(&self) -> bool {
+        self.to_node()
+            .children_with_tokens()
+            .filter_map(|child| child.into_token())
+            .any(|token| {
+                token
+                    .leading_trivia()
+                    .pieces()
+                    .chain(token.trailing_trivia().pieces())
+                    .any(|piece| piece.is_skipped())
+            })
     }
 
     /// Whether the node contains trailing comments.
