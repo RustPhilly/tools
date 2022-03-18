@@ -11,6 +11,7 @@ rslint_parser = { path = "../rslint_parser" }
 rslint_errors = { path = "../rslint_errors" }
 rome_core = { path = "../rome_core", version = "0.0.0" }
 rome_fs = { path = "../rome_fs", version = "0.0.0" }
+rome_console = { path = "../rome_console", version = "0.0.0" }
 pico-args = "0.4.2"
 tracing = "0.1.31"
 tracing-subscriber = "0.3.6"
