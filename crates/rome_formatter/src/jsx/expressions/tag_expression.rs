@@ -1,7 +1,8 @@
-use crate::{FormatElement, FormatResult, Formatter, ToFormatElement};
-use rome_js_syntax::{AstNode, JsxTagExpression};
+use crate::{format_elements, token, FormatElement, FormatResult, Formatter, ToFormatElement};
+use rome_js_syntax::{AstNode, JsxTagExpression, JsxTagExpressionFields};
 impl ToFormatElement for JsxTagExpression {
     fn to_format_element(&self, formatter: &Formatter) -> FormatResult<FormatElement> {
-        Ok(formatter.format_verbatim(self.syntax()))
+        let JsxTagExpressionFields { tag } = self.as_fields();
+        Ok(tag?.to_format_element(formatter)?)
     }
 }

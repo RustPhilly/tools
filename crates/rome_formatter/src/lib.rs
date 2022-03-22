@@ -596,9 +596,11 @@ mod test {
     // use this test check if your snippet prints as you wish, without using a snapshot
     fn quick_test() {
         let src = r#"
-3 + 3 === 7
+<Foo>
+    {abc}
+    </Foo>
 "#;
-        let syntax = SourceType::ts();
+        let syntax = SourceType::jsx();
         let tree = parse(src, 0, syntax.clone());
         let result = format(FormatOptions::default(), &tree.syntax()).unwrap();
         check_reformat(CheckReformatParams {
