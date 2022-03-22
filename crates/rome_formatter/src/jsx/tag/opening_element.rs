@@ -2,7 +2,7 @@ use crate::{
     format_elements, formatter_traits::FormatTokenAndNode, FormatElement, FormatResult, Formatter,
     ToFormatElement,
 };
-use rome_js_syntax::{AstNode, JsxOpeningElement, JsxOpeningElementFields};
+use rome_js_syntax::{JsxOpeningElement, JsxOpeningElementFields};
 impl ToFormatElement for JsxOpeningElement {
     fn to_format_element(&self, formatter: &Formatter) -> FormatResult<FormatElement> {
         let JsxOpeningElementFields {
@@ -14,7 +14,7 @@ impl ToFormatElement for JsxOpeningElement {
 
         Ok(format_elements![
             l_angle_token.format(formatter)?,
-            name?.to_format_element(formatter)?,
+            name.format(formatter)?,
             formatter.format_list(attributes),
             r_angle_token.format(formatter)?
         ])

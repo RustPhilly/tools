@@ -1,5 +1,8 @@
-use crate::{format_elements, token, FormatElement, FormatResult, Formatter, ToFormatElement};
-use rome_js_syntax::{AstNode, JsxElement, JsxElementFields};
+use crate::{
+    format_elements, formatter_traits::FormatTokenAndNode, token, FormatElement, FormatResult,
+    Formatter, ToFormatElement,
+};
+use rome_js_syntax::{JsxElement, JsxElementFields};
 impl ToFormatElement for JsxElement {
     fn to_format_element(&self, formatter: &Formatter) -> FormatResult<FormatElement> {
         let JsxElementFields {
@@ -9,9 +12,9 @@ impl ToFormatElement for JsxElement {
         } = self.as_fields();
 
         Ok(format_elements![
-            opening_element?.to_format_element(formatter)?,
+            opening_element.format(formatter)?,
             formatter.format_list(children),
-            closing_element?.to_format_element(formatter)?
+            closing_element.format(formatter)?
         ])
     }
 }

@@ -2,7 +2,7 @@ use crate::{
     format_elements, formatter_traits::FormatTokenAndNode, FormatElement, FormatResult, Formatter,
     ToFormatElement,
 };
-use rome_js_syntax::{AstNode, JsxClosingElement, JsxClosingElementFields};
+use rome_js_syntax::{JsxClosingElement, JsxClosingElementFields};
 impl ToFormatElement for JsxClosingElement {
     fn to_format_element(&self, formatter: &Formatter) -> FormatResult<FormatElement> {
         let JsxClosingElementFields {
@@ -15,7 +15,7 @@ impl ToFormatElement for JsxClosingElement {
         Ok(format_elements![
             l_angle_token.format(formatter)?,
             slash_token.format(formatter)?,
-            name?.to_format_element(formatter)?,
+            name.format(formatter)?,
             r_angle_token.format(formatter)?
         ])
     }
