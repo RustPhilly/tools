@@ -4,7 +4,7 @@
 //!
 //! The formatter relies on an [IR], which allows to format any kind of data structure.
 //!
-//! In order to implement the formatting logic, you need to implement the trait [FormatValue] for
+//! In order to implement the formatting logic, you need to implement the trait [ToFormatElement] for
 //! the data structure you want to format.
 //!
 //! Let's say, for example that you have a small data structure that represents a key/value data:
@@ -51,21 +51,14 @@ mod cst;
 mod format_element;
 mod format_elements;
 mod formatter;
-pub mod formatter_traits;
+mod formatter_traits;
 mod intersperse;
 mod js;
 mod jsx;
+pub mod prelude;
 mod printer;
 mod ts;
 mod utils;
-
-pub use formatter::Formatter;
-use rome_js_syntax::{SyntaxError, SyntaxNode};
-use rome_rowan::TextRange;
-use rome_rowan::TextSize;
-use rome_rowan::TokenAtOffset;
-use std::fmt::Display;
-
 pub use format_element::{
     block_indent, comment, concat_elements, empty_element, empty_line, fill_elements,
     group_elements, hard_group_elements, hard_line_break, if_group_breaks,
@@ -73,8 +66,14 @@ pub use format_element::{
     soft_block_indent, soft_line_break, soft_line_break_or_space, soft_line_indent_or_space,
     space_token, token, FormatElement, Token,
 };
+pub use formatter::Formatter;
 pub use printer::Printer;
 pub use printer::PrinterOptions;
+use rome_js_syntax::{SyntaxError, SyntaxNode};
+use rome_rowan::TextRange;
+use rome_rowan::TextSize;
+use rome_rowan::TokenAtOffset;
+use std::fmt::Display;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -495,8 +494,8 @@ mod tests {
 
     use super::{format_range, FormatOptions};
     use crate::IndentStyle;
+    use rome_js_parser::parse_script;
     use rome_rowan::{TextRange, TextSize};
-    use rslint_parser::parse_script;
 
     #[test]
     fn test_range_formatting() {
@@ -589,18 +588,16 @@ mod test {
     use crate::check_reformat::{check_reformat, CheckReformatParams};
     use crate::format;
     use crate::FormatOptions;
-    use rslint_parser::{parse, SourceType};
+    use rome_js_parser::{parse, SourceType};
 
     #[test]
     #[ignore]
     // use this test check if your snippet prints as you wish, without using a snapshot
     fn quick_test() {
         let src = r#"
-<Foo>
-    {abc}
-    </Foo>
+ const functionName1 = <T,>(arg) => false;
 "#;
-        let syntax = SourceType::jsx();
+        let syntax = SourceType::tsx();
         let tree = parse(src, 0, syntax.clone());
         let result = format(FormatOptions::default(), &tree.syntax()).unwrap();
         check_reformat(CheckReformatParams {

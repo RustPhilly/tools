@@ -542,7 +542,7 @@ impl FormatPrecedence {
     /// An example can be:
     ///
     /// ```js
-    /// ("simple expression") + " or not"
+    /// let a = ("simple expression") + " or not";
     /// ```
     ///
     /// In this case, we have a parenthesised expression and its parent is a binary expression.
@@ -561,8 +561,8 @@ impl FormatPrecedence {
             | JsSyntaxKind::JS_TEMPLATE
             | JsSyntaxKind::JS_SPREAD
             | JsSyntaxKind::JS_STATIC_MEMBER_EXPRESSION
-            | JsSyntaxKind::JS_CALL_EXPRESSION
             | JsSyntaxKind::JS_STATIC_MEMBER_ASSIGNMENT
+            | JsSyntaxKind::JS_CALL_EXPRESSION
             | JsSyntaxKind::JS_NEW_EXPRESSION
             | JsSyntaxKind::JS_CONDITIONAL_EXPRESSION
             | JsSyntaxKind::JS_EXTENDS_CLAUSE
@@ -572,9 +572,36 @@ impl FormatPrecedence {
             | JsSyntaxKind::JS_ARROW_FUNCTION_EXPRESSION
             | JsSyntaxKind::JS_EXPRESSION_STATEMENT
             | JsSyntaxKind::JS_RETURN_STATEMENT
-            | JsSyntaxKind::JS_COMPUTED_MEMBER_EXPRESSION => FormatPrecedence::High,
+            | JsSyntaxKind::JS_COMPUTED_MEMBER_EXPRESSION
+            | JsSyntaxKind::JS_COMPUTED_MEMBER_ASSIGNMENT => FormatPrecedence::High,
 
             _ => FormatPrecedence::None,
         })
     }
+}
+
+/// Format a some code followed by an optional semicolon, and performs
+/// semicolon insertion if it was missing in the input source and the
+/// preceeding element wasn't an unknown node
+pub(crate) fn format_with_semicolon(
+    formatter: &Formatter,
+    content: FormatElement,
+    semicolon: Option<SyntaxToken>,
+) -> FormatResult<FormatElement> {
+    let is_unknown = match content.last_element() {
+        Some(FormatElement::Verbatim(elem)) => elem.is_unknown(),
+        _ => false,
+    };
+
+    Ok(format_elements![
+        content,
+        semicolon.format_or(
+            formatter,
+            if is_unknown {
+                empty_element
+            } else {
+                || token(";")
+            }
+        )?
+    ])
 }

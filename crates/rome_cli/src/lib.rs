@@ -1,41 +1,28 @@
-use std::fmt::{self, Debug, Display, Formatter};
-
 use pico_args::Arguments;
 use rome_core::App;
 
 mod commands;
 mod metrics;
+mod panic;
+mod termination;
+
+pub use panic::setup_panic_handler;
+pub use termination::Termination;
 
 /// Global context for an execution of the CLI
-pub struct CliSession {
+pub struct CliSession<'app> {
     /// Instance of [App] used by this run of the CLI
-    pub app: App,
+    pub app: App<'app>,
     /// List of command line arguments
     pub args: Arguments,
 }
 
-impl CliSession {
+impl CliSession<'static> {
     pub fn from_env() -> Self {
         Self {
             app: App::from_env(),
             args: Arguments::from_env(),
         }
-    }
-}
-
-/// Error message returned by the CLI when it aborts with an error
-#[derive(PartialEq, Eq)]
-pub struct Termination(pub(crate) String);
-
-impl<T: Display> From<T> for Termination {
-    fn from(msg: T) -> Self {
-        Self(msg.to_string())
-    }
-}
-
-impl Debug for Termination {
-    fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
-        write!(fmt, "{}", self.0)
     }
 }
 
@@ -47,15 +34,18 @@ pub fn run_cli(mut session: CliSession) -> Result<(), Termination> {
     }
 
     let has_help = session.args.contains("--help");
-    let subcommand = session.args.subcommand();
+    let subcommand = session
+        .args
+        .subcommand()
+        .map_err(|source| Termination::ParseError {
+            argument: "<command>",
+            source,
+        })?;
 
-    match subcommand.as_ref().map(Option::as_deref) {
-        Ok(Some(cmd)) if has_help => {
-            crate::commands::help::help(Some(cmd));
-            Ok(())
-        }
+    match subcommand.as_deref() {
+        Some(cmd) if has_help => crate::commands::help::help(Some(cmd)),
 
-        Ok(Some("format")) => {
+        Some("format") => {
             let result = crate::commands::format::format(session);
 
             if has_metrics {
@@ -65,12 +55,10 @@ pub fn run_cli(mut session: CliSession) -> Result<(), Termination> {
             result
         }
 
-        Ok(None | Some("help")) => {
-            crate::commands::help::help(None);
-            Ok(())
-        }
+        None | Some("help") => crate::commands::help::help(None),
 
-        Ok(Some(cmd)) => Err(Termination(format!("unknown command {cmd:?}"))),
-        Err(err) => Err(Termination(format!("failed to parse command: {err}"))),
+        Some(cmd) => Err(Termination::UnknownCommand {
+            command: cmd.into(),
+        }),
     }
 }
