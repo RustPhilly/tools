@@ -6,6 +6,7 @@ use rome_js_syntax::{JsxOpeningElement, JsxOpeningElementFields};
 impl ToFormatElement for JsxOpeningElement {
     fn to_format_element(&self, formatter: &Formatter) -> FormatResult<FormatElement> {
         let JsxOpeningElementFields {
+            type_arguments,
             l_angle_token,
             name,
             attributes,

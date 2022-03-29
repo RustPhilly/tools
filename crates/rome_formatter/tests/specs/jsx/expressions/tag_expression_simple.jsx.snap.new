@@ -1,11 +1,11 @@
 ---
 source: crates/rome_formatter/tests/spec_test.rs
-assertion_line: 197
-expression: tag_expression.jsx
+assertion_line: 198
+expression: tag_expression_simple.jsx
 
 ---
 # Input
-<a></a>
+<a></a>;
 =============================
 # Outputs
 ## Output 1
