@@ -40,10 +40,8 @@ use super::auxiliary::{is_nth_at_declaration_clause, parse_declaration_clause};
 // export { a };
 // c();
 // import { c } from "c";
-pub(crate) fn parse_module_body(p: &mut Parser, m: Marker) -> CompletedMarker {
-    parse_module_item_list(p, ModuleItemListParent::Module);
-
-    m.complete(p, JS_MODULE)
+pub(crate) fn parse_module_body(p: &mut Parser, statement_list: Marker) {
+    parse_module_item_list(p, ModuleItemListParent::Module, statement_list);
 }
 
 pub(crate) enum ModuleItemListParent {
@@ -69,8 +67,11 @@ impl ModuleItemListParent {
     }
 }
 
-pub(crate) fn parse_module_item_list(p: &mut Parser, parent: ModuleItemListParent) {
-    let list_marker = p.start();
+pub(crate) fn parse_module_item_list(
+    p: &mut Parser,
+    parent: ModuleItemListParent,
+    list_marker: Marker,
+) {
     let mut progress = ParserProgress::default();
 
     let recovery_set = if parent.is_module() {
@@ -236,10 +237,7 @@ fn parse_import_default_or_named_clause_rest(
             parse_named_import(p).or_add_diagnostic(p, expected_named_import);
 
             if is_typed {
-                let end = p
-                    .last_range()
-                    .map(|r| r.end())
-                    .unwrap_or_else(|| p.cur_range().start());
+                let end = p.last_end().unwrap_or_else(|| p.cur_range().start());
 
                 // test_err ts ts_typed_default_import_with_named
                 // import type A, { B, C } from './a';

@@ -877,7 +877,8 @@ fn parse_static_initialization_block_class_member(
     p.expect(T![static]);
     p.expect(T!['{']);
     p.with_state(EnterClassStaticInitializationBlock, |p| {
-        parse_statements(p, true)
+        let statement_list = p.start();
+        parse_statements(p, true, statement_list)
     });
     p.expect(T!['}']);
 
@@ -957,10 +958,7 @@ fn parse_property_class_member_body(
 fn expect_member_semi(p: &mut Parser, member_marker: &Marker, name: &str) {
     if !optional_semi(p) {
         // Gets the start of the member
-        let end = p
-            .last_range()
-            .map(|r| r.end())
-            .unwrap_or_else(|| p.cur_range().start());
+        let end = p.last_end().unwrap_or_else(|| p.cur_range().start());
 
         let err = p
             .err_builder(&format!(
