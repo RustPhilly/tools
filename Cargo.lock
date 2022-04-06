@@ -1374,11 +1374,11 @@ name = "rome_console"
 version = "0.0.0"
 dependencies = [
  "lazy_static",
- "rome_diagnostics",
  "rome_markup",
  "similar",
  "termcolor",
  "trybuild",
+ "unicode-width",
 ]
 
 [[package]]
@@ -1390,11 +1390,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rome_css_syntax"
+version = "0.1.0"
+
+[[package]]
 name = "rome_diagnostics"
 version = "0.2.0"
 dependencies = [
  "colored",
  "lsp-types 0.92.0",
+ "rome_console",
  "rome_rowan",
  "rome_text_edit",
  "serde",
