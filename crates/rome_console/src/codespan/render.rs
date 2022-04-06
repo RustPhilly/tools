@@ -1,25 +1,56 @@
-use std::io::{self, Write};
-use std::ops::Range;
-use termcolor::{ColorSpec, WriteColor};
+use std::io;
+use std::{io::Error, ops::Range};
 
-use super::super::diagnostic::{LabelStyle, Note, Severity};
-use super::super::files::{Error, Location};
-use super::super::term::{Chars, Config, Styles};
+use crate::fmt::Display;
+use crate::markup::MarkupBuf;
+use crate::{self as rome_console, MarkupNode};
+use crate::{
+    codespan::{LabelStyle, Locus, Severity},
+    fmt::Formatter,
+    markup, Markup, MarkupElement,
+};
 
 const MAX_LINE_LENGTH: usize = 250;
 
-/// The 'location focus' of a source code snippet.
-pub enum Locus {
-    File {
-        /// The user-facing name of the file.
-        name: String,
-    },
-    FileLocation {
-        /// The user-facing name of the file.
-        name: String,
-        /// The location.
-        location: Location,
-    },
+const SOURCE_BORDER_TOP_LEFT: char = '┌';
+const SOURCE_BORDER_TOP: char = '─';
+const SOURCE_BORDER_LEFT: char = '│';
+const SOURCE_BORDER_LEFT_BREAK: char = '·';
+
+const SINGLE_PRIMARY_CARET: char = '^';
+const SINGLE_SECONDARY_CARET: char = '-';
+
+const MULTI_PRIMARY_CARET_START: char = '^';
+const MULTI_SECONDARY_CARET_START: char = '\'';
+const MULTI_TOP_LEFT: char = '┌';
+const MULTI_TOP: char = '─';
+const MULTI_BOTTOM_LEFT: char = '└';
+const MULTI_BOTTOM: char = '─';
+const MULTI_LEFT: char = '│';
+
+const POINTER_LEFT: char = '│';
+
+/// Prints a piece of markup with the appropriate formatting for the given
+/// label style and severity
+#[derive(Clone, Copy)]
+pub struct WithSeverity<'a>(pub LabelStyle, pub Severity, pub &'a dyn Display);
+
+impl<'a> Display for WithSeverity<'a> {
+    fn fmt(&self, fmt: &mut Formatter) -> io::Result<()> {
+        let element = match (self.0, self.1) {
+            (LabelStyle::Primary, Severity::Bug) => MarkupElement::Error,
+            (LabelStyle::Primary, Severity::Error) => MarkupElement::Error,
+            (LabelStyle::Primary, Severity::Warning) => MarkupElement::Warn,
+            (LabelStyle::Primary, Severity::Note) => MarkupElement::Success,
+            (LabelStyle::Primary, Severity::Help) => MarkupElement::Info,
+            (LabelStyle::Secondary, _) => MarkupElement::Info,
+        };
+
+        fmt.write_markup(Markup(&[MarkupNode {
+            elements: &[element],
+            content: self.2,
+        }]))
+    }
 }
 
 /// Single-line label, with an optional message.
@@ -27,12 +58,12 @@ pub enum Locus {
 /// ```text
 /// ^^^^^^^^^ blah blah
 /// ```
-pub type SingleLabel<'diagnostic> = (LabelStyle, Range<usize>, &'diagnostic str);
+pub(super) type SingleLabel<'diagnostic> = (LabelStyle, Range<usize>, &'diagnostic MarkupBuf);
 
 /// A multi-line label to render.
 ///
 /// Locations are relative to the start of where the source code is rendered.
-pub enum MultiLabel<'diagnostic> {
+pub(super) enum MultiLabel<'diagnostic> {
     /// Multi-line label top.
     /// The contained value indicates where the label starts.
     ///
@@ -59,7 +90,7 @@ pub enum MultiLabel<'diagnostic> {
     /// ```text
     /// ╰────────────^ blah blah
     /// ```
-    Bottom(usize, &'diagnostic str),
+    Bottom(usize, &'diagnostic MarkupBuf),
 }
 
 #[derive(Copy, Clone)]
@@ -81,7 +112,6 @@ type Underline = (LabelStyle, VerticalBound);
 ///                     │ │ │   ┌─────────────────────────── source ─────────────────────────────┐
 ///                     │ │ │   │                                                                │
 ///                  ┌────────────────────────────────────────────────────────────────────────────
-///        header ── │ error[0001]: oh noes, a cupcake has occurred!
 /// snippet start ── │    ┌─ test:9:0
 /// snippet empty ── │    │
 ///  snippet line ── │  9 │   ╭ Cupcake ipsum dolor. Sit amet marshmallow topping cheesecake
@@ -106,101 +136,18 @@ type Underline = (LabelStyle, VerticalBound);
 /// snippet break ── │    ·
 ///  snippet line ── │ 82 │     gingerbread toffee chupa chups chupa chups jelly-o cotton candy.
 ///                  │    │                 ^^^^^^                         ------- blah blah
-/// snippet empty ── │    │
-///  snippet note ── │    = blah blah
-///  snippet note ── │    = blah blah blah
-///                  │      blah blah
-///  snippet note ── │    = blah blah blah
-///                  │      blah blah
 ///         empty ── │
 /// ```
 ///
 /// Filler text from http://www.cupcakeipsum.com
-pub struct Renderer<'writer, 'config> {
-    writer: &'writer mut dyn WriteColor,
-    config: &'config Config,
+pub(super) struct Renderer<'render, 'fmt> {
+    writer: &'render mut Formatter<'fmt>,
 }
 
-impl<'writer, 'config> Renderer<'writer, 'config> {
+impl<'render, 'fmt> Renderer<'render, 'fmt> {
     /// Construct a renderer from the given writer and config.
-    pub fn new(
-        writer: &'writer mut dyn WriteColor,
-        config: &'config Config,
-    ) -> Renderer<'writer, 'config> {
-        Renderer { writer, config }
-    }
-
-    fn chars(&self) -> &'config Chars {
-        &self.config.chars
-    }
-
-    fn styles(&self) -> &'config Styles {
-        &self.config.styles
-    }
-
-    /// Diagnostic header, with severity, code, and message.
-    ///
-    /// ```text
-    /// error[E0001]: unexpected type in `+` application
-    /// ```
-    pub fn render_header(
-        &mut self,
-        locus: Option<&Locus>,
-        severity: Severity,
-        code: Option<&str>,
-        message: &str,
-    ) -> Result<(), Error> {
-        // Write locus
-        //
-        // ```text
-        // test:2:9:
-        // ```
-        if let Some(locus) = locus {
-            self.snippet_locus(locus)?;
-            write!(self, ": ")?;
-        }
-
-        // Write severity name
-        //
-        // ```text
-        // error
-        // ```
-        self.set_color(self.styles().header(severity))?;
-        match severity {
-            Severity::Bug => write!(self, "bug")?,
-            Severity::Error => write!(self, "error")?,
-            Severity::Warning => write!(self, "warning")?,
-            Severity::Help => write!(self, "help")?,
-            Severity::Note => write!(self, "note")?,
-        }
-
-        // Write error code
-        //
-        // ```text
-        // [E0001]
-        // ```
-        if let Some(code) = &code.filter(|code| !code.is_empty()) {
-            write!(self, "[{}]", code)?;
-        }
-
-        // Write diagnostic message
-        //
-        // ```text
-        // : unexpected type in `+` application
-        // ```
-        self.set_color(&self.styles().header_message)?;
-        write!(self, ": {}", message)?;
-        self.reset()?;
-
-        writeln!(self)?;
-
-        Ok(())
-    }
-
-    /// Empty line.
-    pub fn render_empty(&mut self) -> Result<(), Error> {
-        writeln!(self)?;
-        Ok(())
+    pub(super) fn new(writer: &'render mut Formatter<'fmt>) -> Renderer<'render, 'fmt> {
+        Renderer { writer }
     }
 
     /// Top left border and locus.
@@ -208,27 +155,19 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
     /// ```text
     /// ┌─ test:2:9
     /// ```
-    pub fn render_snippet_start(
+    pub(super) fn render_snippet_start(
         &mut self,
         outer_padding: usize,
         locus: &Locus,
     ) -> Result<(), Error> {
         self.outer_gutter(outer_padding)?;
-
-        self.set_color(&self.styles().source_border)?;
-        write!(self, "{}", self.chars().source_border_top_left)?;
-        write!(self, "{0}", self.chars().source_border_top)?;
-        self.reset()?;
-
-        write!(self, " ")?;
-        self.snippet_locus(&locus)?;
-
-        writeln!(self)?;
-
-        Ok(())
+        self.writer.write_markup(markup! {
+            <Info>{SOURCE_BORDER_TOP_LEFT}{SOURCE_BORDER_TOP}</Info>" "{locus}"\n"
+        })
     }
 
-    pub fn render_snippet_source_impl(
+    #[allow(clippy::too_many_arguments)]
+    fn render_snippet_source_impl(
         &mut self,
         outer_padding: usize,
         line_number: usize,
@@ -275,8 +214,7 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
             }
 
             // Write source text
-            write!(self, " ")?;
-            let mut in_primary = false;
+            write!(self.writer, " ")?;
             for (metrics, ch) in self.char_metrics(source.char_indices()) {
                 let column_range = metrics.byte_index..(metrics.byte_index + ch.len_utf8());
 
@@ -292,24 +230,31 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
                         }
                 });
 
-                // Set the source color if we are in a primary label
-                if is_primary && !in_primary {
-                    self.set_color(self.styles().label(severity, LabelStyle::Primary))?;
-                    in_primary = true;
-                } else if !is_primary && in_primary {
-                    self.reset()?;
-                    in_primary = false;
-                }
-
                 match ch {
-                    '\t' => (0..metrics.unicode_width).try_for_each(|_| write!(self, " "))?,
-                    _ => write!(self, "{}", ch)?,
+                    '\t' => {
+                        (0..metrics.unicode_width).try_for_each(|_| write!(self.writer, " "))?
+                    }
+                    _ => {
+                        // Set the source color if we are in a primary label
+                        if is_primary {
+                            let style = match severity {
+                                Severity::Bug | Severity::Error => MarkupElement::Error,
+                                Severity::Warning => MarkupElement::Warn,
+                                Severity::Note => MarkupElement::Info,
+                                Severity::Help => MarkupElement::Info,
+                            };
+
+                            self.writer.write_markup(Markup(&[MarkupNode {
+                                elements: &[style],
+                                content: &ch,
+                            }]))?
+                        } else {
+                            write!(self.writer, "{}", ch)?
+                        }
+                    }
                 }
             }
-            if in_primary {
-                self.reset()?;
-            }
-            writeln!(self)?;
+            writeln!(self.writer)?;
         }
 
         // Write single labels underneath source
@@ -406,9 +351,8 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
             self.outer_gutter(outer_padding)?;
             self.border_left()?;
             self.inner_gutter(severity, num_multi_labels, multi_labels)?;
-            write!(self, " ")?;
+            write!(self.writer, " ")?;
 
-            let mut previous_label_style = None;
             let placeholder_metrics = Metrics {
                 byte_index: source.len(),
                 unicode_width: 1,
@@ -432,43 +376,40 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
                     .map(|(label_style, _, _)| *label_style)
                     .max_by_key(label_priority_key);
 
-                // Update writer style if necessary
-                if previous_label_style != current_label_style {
-                    match current_label_style {
-                        None => self.reset()?,
-                        Some(label_style) => {
-                            self.set_color(self.styles().label(severity, label_style))?;
-                        }
-                    }
-                }
-
                 let caret_ch = match current_label_style {
-                    Some(LabelStyle::Primary) => Some(self.chars().single_primary_caret),
-                    Some(LabelStyle::Secondary) => Some(self.chars().single_secondary_caret),
+                    Some(LabelStyle::Primary) => Some(SINGLE_PRIMARY_CARET),
+                    Some(LabelStyle::Secondary) => Some(SINGLE_SECONDARY_CARET),
                     // Only print padding if we are before the end of the last single line caret
                     None if metrics.byte_index < max_label_end => Some(' '),
                     None => None,
                 };
 
-                if let Some(caret_ch) = caret_ch {
-                    // FIXME: improve rendering of carets between character boundaries
-                    (0..metrics.unicode_width).try_for_each(|_| write!(self, "{}", caret_ch))?;
+                match (current_label_style, caret_ch) {
+                    (_, None) => {}
+                    (None, Some(caret_ch)) => {
+                        // FIXME: improve rendering of carets between character boundaries
+                        (0..metrics.unicode_width)
+                            .try_for_each(|_| write!(self.writer, "{}", caret_ch))?;
+                    }
+                    (Some(label_style), Some(caret_ch)) => {
+                        for _ in 0..metrics.unicode_width {
+                            self.writer.write_markup(markup! {
+                                {WithSeverity(label_style, severity, &markup! { {caret_ch} })}
+                            })?;
+                        }
+                    }
                 }
-
-                previous_label_style = current_label_style;
-            }
-            // Reset style if it was previously set
-            if previous_label_style.is_some() {
-                self.reset()?;
             }
             // Write first trailing label message
             if let Some((_, (label_style, _, message))) = trailing_label {
-                write!(self, " ")?;
-                self.set_color(self.styles().label(severity, *label_style))?;
-                write!(self, "{}", message)?;
-                self.reset()?;
+                if !message.is_empty() {
+                    write!(self.writer, " ")?;
+                    self.writer.write_markup(markup! {
+                        {WithSeverity(*label_style, severity, message)}
+                    })?;
+                }
             }
-            writeln!(self)?;
+            writeln!(self.writer)?;
 
             // Write hanging labels pointing to carets
             //
@@ -487,7 +428,7 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
                 self.outer_gutter(outer_padding)?;
                 self.border_left()?;
                 self.inner_gutter(severity, num_multi_labels, multi_labels)?;
-                write!(self, " ")?;
+                write!(self.writer, " ")?;
                 self.caret_pointers(
                     severity,
                     max_label_start,
@@ -495,7 +436,7 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
                     trailing_label,
                     source.char_indices(),
                 )?;
-                writeln!(self)?;
+                writeln!(self.writer)?;
 
                 // Write hanging labels pointing to carets
                 //
@@ -510,7 +451,7 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
                     self.outer_gutter(outer_padding)?;
                     self.border_left()?;
                     self.inner_gutter(severity, num_multi_labels, multi_labels)?;
-                    write!(self, " ")?;
+                    write!(self.writer, " ")?;
                     self.caret_pointers(
                         severity,
                         max_label_start,
@@ -520,10 +461,10 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
                             .char_indices()
                             .take_while(|(byte_index, _)| *byte_index < range.start),
                     )?;
-                    self.set_color(self.styles().label(severity, *label_style))?;
-                    write!(self, "{}", message)?;
-                    self.reset()?;
-                    writeln!(self)?;
+                    self.writer.write_markup(markup! {
+                        {WithSeverity(*label_style, severity, *message)}
+                    })?;
+                    writeln!(self.writer)?;
                 }
             }
         }
@@ -603,7 +544,7 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
         line_number: usize,
         line_range: Range<usize>,
         severity: Severity,
-        single_labels: &mut Vec<(LabelStyle, Range<usize>, &str)>,
+        single_labels: &mut Vec<(LabelStyle, Range<usize>, &MarkupBuf)>,
         outer_padding: usize,
         source: &str,
     ) -> Result<(), Error> {
@@ -671,7 +612,8 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
     /// 10 │   │ muffin. Halvah croissant candy canes bonbon candy. Apple pie jelly
     ///    │ ╭─│─────────^
     /// ```
-    pub fn render_snippet_source(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn render_snippet_source(
         &mut self,
         outer_padding: usize,
         line_number: usize,
@@ -685,22 +627,22 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
         // if the line is smaller than max_line_length, we print it entirely...
         // we also print it entirely if there are multi_labels
         let line_candidate = &source[line_range.clone()];
-        if (line_candidate.len() < MAX_LINE_LENGTH) || (multi_labels.len() > 0) {
+        if (line_candidate.len() < MAX_LINE_LENGTH) || !multi_labels.is_empty() {
             return self.render_snippet_source_impl(
                 outer_padding,
                 line_number,
                 line_candidate,
                 severity,
-                &single_labels,
+                single_labels,
                 num_multi_labels,
-                &multi_labels,
+                multi_labels,
             );
         } else {
             // ... if not, we try to fit as many single_labels as possible
             // showing only the interesting part of the line.
             let mut candidates = vec![];
             for single_label in single_labels.iter() {
-                candidates.push(single_label.clone());
+                candidates.push((*single_label).clone());
 
                 // We need to know which part of the long line we are going to display
                 let labels_start = candidates.first().map_or(line_range.start, |x| x.1.start);
@@ -720,7 +662,7 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
                 }
             }
 
-            if candidates.len() > 0 {
+            if !candidates.is_empty() {
                 self.render_snippet_source_inside_of_long_line(
                     line_number,
                     line_range,
@@ -740,7 +682,7 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
     /// ```text
     /// │ │ │
     /// ```
-    pub fn render_snippet_empty(
+    pub(super) fn render_snippet_empty(
         &mut self,
         outer_padding: usize,
         severity: Severity,
@@ -750,7 +692,7 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
         self.outer_gutter(outer_padding)?;
         self.border_left()?;
         self.inner_gutter(severity, num_multi_labels, multi_labels)?;
-        writeln!(self)?;
+        writeln!(self.writer)?;
         Ok(())
     }
 
@@ -759,7 +701,7 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
     /// ```text
     /// · │ │
     /// ```
-    pub fn render_snippet_break(
+    pub(super) fn render_snippet_break(
         &mut self,
         outer_padding: usize,
         severity: Severity,
@@ -769,80 +711,7 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
         self.outer_gutter(outer_padding)?;
         self.border_left_break()?;
         self.inner_gutter(severity, num_multi_labels, multi_labels)?;
-        writeln!(self)?;
-        Ok(())
-    }
-
-    /// Additional notes.
-    ///
-    /// ```text
-    /// = expected type `Int`
-    ///      found type `String`
-    /// ```
-    pub fn render_snippet_note(
-        &mut self,
-        outer_padding: usize,
-        note: Note,
-        has_another_note_after: bool,
-    ) -> Result<(), Error> {
-        let mut offset = 0;
-        for (note_line_index, line) in note.message.lines().enumerate() {
-            match note_line_index {
-                0 => {
-                    self.outer_gutter(outer_padding)?;
-                    self.set_color(&self.styles().note_bullet)?;
-                    write!(
-                        self,
-                        "{}",
-                        if !has_another_note_after {
-                            self.chars().note_bullet_end
-                        } else {
-                            self.chars().note_bullet_middle
-                        }
-                    )?;
-                    self.reset()?;
-                    if let Some(severity) = note.severity {
-                        write!(self, " ");
-                        if severity == Severity::Note {
-                            self.set_color(&self.styles().header_help)?;
-                        } else {
-                            self.set_color(&self.styles().header(severity))?;
-                        }
-                        let string = match severity {
-                            Severity::Bug => "bug",
-                            Severity::Error => "error",
-                            Severity::Warning => "warning",
-                            Severity::Help => "help",
-                            Severity::Note => "note",
-                        };
-                        offset += string.len();
-                        write!(self, "{}", string)?;
-                        self.reset()?;
-                        write!(self, ":")?;
-                        offset += 1;
-                    }
-                }
-                _ => {
-                    if has_another_note_after {
-                        // write a gutter between a new line and the next note bullet if there is another note
-                        // so its not disjointed
-                        // ```
-                        // = help: foo bar baz
-                        // |         bar
-                        // = note: foo
-                        ///```
-                        self.outer_gutter(outer_padding)?;
-                        self.border_left()?;
-                    } else {
-                        self.outer_gutter(outer_padding)?;
-                    }
-                    write!(self, " {}", " ".repeat(offset))?
-                }
-            }
-            // Write line of message
-            writeln!(self, " {}", line)?;
-        }
-
+        writeln!(self.writer)?;
         Ok(())
     }
 
@@ -851,11 +720,11 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
     /// of the line.
     fn char_metrics(
         &self,
-        char_indices: impl Iterator<Item = (usize, char)>,
-    ) -> impl Iterator<Item = (Metrics, char)> {
+        char_indices: impl Iterator<Item = (usize, char)> + Clone,
+    ) -> impl Iterator<Item = (Metrics, char)> + Clone {
         use unicode_width::UnicodeWidthChar;
 
-        let tab_width = self.config.tab_width;
+        let tab_width = 4;
         let mut unicode_column = 0;
 
         char_indices.map(move |(byte_index, ch)| {
@@ -873,24 +742,14 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
         })
     }
 
-    /// Location focus.
-    fn snippet_locus(&mut self, locus: &Locus) -> Result<(), Error> {
-        match locus {
-            Locus::File { name } => write!(self, "{name}",)?,
-            Locus::FileLocation { name, location } => write!(
-                self,
-                "{name}:{line_number}:{column_number}",
-                name = name,
-                line_number = location.line_number,
-                column_number = location.column_number,
-            )?,
-        }
-        Ok(())
-    }
-
     /// The outer gutter of a source line.
     fn outer_gutter(&mut self, outer_padding: usize) -> Result<(), Error> {
-        write!(self, "{space: >width$} ", space = "", width = outer_padding)?;
+        write!(
+            self.writer,
+            "{space: >width$} ",
+            space = "",
+            width = outer_padding
+        )?;
         Ok(())
     }
 
@@ -900,31 +759,32 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
         line_number: usize,
         outer_padding: usize,
     ) -> Result<(), Error> {
-        self.set_color(&self.styles().line_number)?;
-        write!(
-            self,
-            "{line_number: >width$}",
-            line_number = line_number,
-            width = outer_padding,
-        )?;
-        self.reset()?;
-        write!(self, " ")?;
+        self.writer.write_markup(markup! {
+            <Info>
+                {format_args!(
+                    "{line_number: >width$}",
+                    line_number = line_number,
+                    width = outer_padding
+                )}
+            </Info>
+        })?;
+        write!(self.writer, " ")?;
         Ok(())
     }
 
     /// The left-hand border of a source line.
     fn border_left(&mut self) -> Result<(), Error> {
-        self.set_color(&self.styles().source_border)?;
-        write!(self, "{}", self.chars().source_border_left)?;
-        self.reset()?;
+        self.writer.write_markup(markup! {
+            <Info>{SOURCE_BORDER_LEFT}</Info>
+        })?;
         Ok(())
     }
 
     /// The broken left-hand border of a source line.
     fn border_left_break(&mut self) -> Result<(), Error> {
-        self.set_color(&self.styles().source_border)?;
-        write!(self, "{}", self.chars().source_border_left_break)?;
-        self.reset()?;
+        self.writer.write_markup(markup! {
+            <Info>{SOURCE_BORDER_LEFT_BREAK}</Info>
+        })?;
         Ok(())
     }
 
@@ -935,7 +795,7 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
         max_label_start: usize,
         single_labels: &[SingleLabel<'_>],
         trailing_label: Option<(usize, &SingleLabel<'_>)>,
-        char_indices: impl Iterator<Item = (usize, char)>,
+        char_indices: impl Iterator<Item = (usize, char)> + Clone,
     ) -> Result<(), Error> {
         for (metrics, ch) in self.char_metrics(char_indices) {
             let column_range = metrics.byte_index..(metrics.byte_index + ch.len_utf8());
@@ -947,15 +807,15 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
             let mut spaces = match label_style {
                 None => 0..metrics.unicode_width,
                 Some(label_style) => {
-                    self.set_color(self.styles().label(severity, label_style))?;
-                    write!(self, "{}", self.chars().pointer_left)?;
-                    self.reset()?;
+                    self.writer.write_markup(markup! {
+                        {WithSeverity(label_style, severity, &POINTER_LEFT)}
+                    })?;
                     1..metrics.unicode_width
                 }
             };
             // Only print padding if we are before the end of the last single line caret
             if metrics.byte_index <= max_label_start {
-                spaces.try_for_each(|_| write!(self, " "))?;
+                spaces.try_for_each(|_| write!(self.writer, " "))?;
             }
         }
 
@@ -974,17 +834,17 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
         underline: Option<LabelStyle>,
     ) -> Result<(), Error> {
         match underline {
-            None => write!(self, " ")?,
+            None => write!(self.writer, " ")?,
             // Continue an underline horizontally
             Some(label_style) => {
-                self.set_color(self.styles().label(severity, label_style))?;
-                write!(self, "{}", self.chars().multi_top)?;
-                self.reset()?;
+                self.writer.write_markup(markup! {
+                    {WithSeverity(label_style, severity, &MULTI_TOP)}
+                })?;
             }
         }
-        self.set_color(self.styles().label(severity, label_style))?;
-        write!(self, "{}", self.chars().multi_left)?;
-        self.reset()?;
+        self.writer.write_markup(markup! {
+            {WithSeverity(label_style, severity, &MULTI_LEFT)}
+        })?;
         Ok(())
     }
 
@@ -998,10 +858,10 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
         severity: Severity,
         label_style: LabelStyle,
     ) -> Result<(), Error> {
-        write!(self, " ")?;
-        self.set_color(self.styles().label(severity, label_style))?;
-        write!(self, "{}", self.chars().multi_top_left)?;
-        self.reset()?;
+        write!(self.writer, " ")?;
+        self.writer.write_markup(markup! {
+            {WithSeverity(label_style, severity, &MULTI_TOP_LEFT)}
+        })?;
         Ok(())
     }
 
@@ -1015,10 +875,10 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
         severity: Severity,
         label_style: LabelStyle,
     ) -> Result<(), Error> {
-        write!(self, " ")?;
-        self.set_color(self.styles().label(severity, label_style))?;
-        write!(self, "{}", self.chars().multi_bottom_left)?;
-        self.reset()?;
+        write!(self.writer, " ")?;
+        self.writer.write_markup(markup! {
+            {WithSeverity(label_style, severity, &MULTI_BOTTOM_LEFT)}
+        })?;
         Ok(())
     }
 
@@ -1034,24 +894,18 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
         source: &str,
         start: usize,
     ) -> Result<(), Error> {
-        self.set_color(self.styles().label(severity, label_style))?;
+        self.writer.write_markup(markup! {
+            {WithSeverity(label_style, severity, &MultiCaret {
+                label_style,
+                message: &MarkupBuf(Vec::new()),
+                caret: MULTI_TOP,
+                char_metrics: self
+                    .char_metrics(source.char_indices())
+                    .take_while(|(metrics, _)| metrics.byte_index < start + 1),
+            })}
+        })?;
 
-        for (metrics, _) in self
-            .char_metrics(source.char_indices())
-            .take_while(|(metrics, _)| metrics.byte_index < start + 1)
-        {
-            // FIXME: improve rendering of carets between character boundaries
-            (0..metrics.unicode_width)
-                .try_for_each(|_| write!(self, "{}", self.chars().multi_top))?;
-        }
-
-        let caret_start = match label_style {
-            LabelStyle::Primary => self.config.chars.multi_primary_caret_start,
-            LabelStyle::Secondary => self.config.chars.multi_secondary_caret_start,
-        };
-        write!(self, "{}", caret_start)?;
-        self.reset()?;
-        writeln!(self)?;
+        writeln!(self.writer)?;
         Ok(())
     }
 
@@ -1066,29 +920,20 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
         label_style: LabelStyle,
         source: &str,
         start: usize,
-        message: &str,
+        message: &MarkupBuf,
     ) -> Result<(), Error> {
-        self.set_color(self.styles().label(severity, label_style))?;
+        self.writer.write_markup(markup! {
+            {WithSeverity(label_style, severity, &MultiCaret {
+                label_style,
+                message,
+                caret: MULTI_BOTTOM,
+                char_metrics: self
+                    .char_metrics(source.char_indices())
+                    .take_while(|(metrics, _)| metrics.byte_index < start),
+            })}
+        })?;
 
-        for (metrics, _) in self
-            .char_metrics(source.char_indices())
-            .take_while(|(metrics, _)| metrics.byte_index < start)
-        {
-            // FIXME: improve rendering of carets between character boundaries
-            (0..metrics.unicode_width)
-                .try_for_each(|_| write!(self, "{}", self.chars().multi_bottom))?;
-        }
-
-        let caret_end = match label_style {
-            LabelStyle::Primary => self.config.chars.multi_primary_caret_start,
-            LabelStyle::Secondary => self.config.chars.multi_secondary_caret_start,
-        };
-        write!(self, "{}", caret_end)?;
-        if !message.is_empty() {
-            write!(self, " {}", message)?;
-        }
-        self.reset()?;
-        writeln!(self)?;
+        writeln!(self.writer)?;
         Ok(())
     }
 
@@ -1101,13 +946,15 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
         match underline {
             None => self.inner_gutter_space(),
             Some((label_style, vertical_bound)) => {
-                self.set_color(self.styles().label(severity, label_style))?;
                 let ch = match vertical_bound {
-                    VerticalBound::Top => self.config.chars.multi_top,
-                    VerticalBound::Bottom => self.config.chars.multi_bottom,
+                    VerticalBound::Top => MULTI_TOP,
+                    VerticalBound::Bottom => MULTI_BOTTOM,
                 };
-                write!(self, "{0}{0}", ch)?;
-                self.reset()?;
+                self.writer.write_markup(markup! {
+                    {WithSeverity(label_style, severity, &markup!{
+                        {ch}{ch}
+                    })}
+                })?;
                 Ok(())
             }
         }
@@ -1115,7 +962,7 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
 
     /// Writes an empty gutter space.
     fn inner_gutter_space(&mut self) -> Result<(), Error> {
-        write!(self, "  ")?;
+        write!(self.writer, "  ")?;
         Ok(())
     }
 
@@ -1147,34 +994,38 @@ impl<'writer, 'config> Renderer<'writer, 'config> {
     }
 }
 
-impl<'writer, 'config> Write for Renderer<'writer, 'config> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.writer.write(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.writer.flush()
-    }
+#[derive(Clone, Copy)]
+struct MultiCaret<'a, I> {
+    label_style: LabelStyle,
+    message: &'a MarkupBuf,
+    caret: char,
+    char_metrics: I,
 }
 
-impl<'writer, 'config> WriteColor for Renderer<'writer, 'config> {
-    fn supports_color(&self) -> bool {
-        self.writer.supports_color()
-    }
+impl<'a, I> Display for MultiCaret<'a, I>
+where
+    I: Iterator<Item = (Metrics, char)> + Clone,
+{
+    fn fmt(&self, fmt: &mut Formatter) -> io::Result<()> {
+        for (metrics, _) in self.char_metrics.clone() {
+            // FIXME: improve rendering of carets between character boundaries
+            (0..metrics.unicode_width).try_for_each(|_| write!(fmt, "{}", self.caret))?;
+        }
 
-    fn set_color(&mut self, spec: &ColorSpec) -> io::Result<()> {
-        self.writer.set_color(spec)
-    }
+        let caret_end = match self.label_style {
+            LabelStyle::Primary => MULTI_PRIMARY_CARET_START,
+            LabelStyle::Secondary => MULTI_SECONDARY_CARET_START,
+        };
 
-    fn reset(&mut self) -> io::Result<()> {
-        self.writer.reset()
-    }
+        write!(fmt, "{}", caret_end)?;
 
-    fn is_synchronous(&self) -> bool {
-        self.writer.is_synchronous()
+        if !self.message.is_empty() {
+            fmt.write_markup(markup! { " "{self.message} })?;
+        }
+
+        Ok(())
     }
 }
-
 struct Metrics {
     byte_index: usize,
     unicode_width: usize,
