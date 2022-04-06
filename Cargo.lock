@@ -1429,6 +1429,8 @@ dependencies = [
  "ctor",
  "insta",
  "parking_lot 0.12.0",
+ "quickcheck",
+ "quickcheck_macros",
  "rome_core",
  "rome_diagnostics",
  "rome_formatter",

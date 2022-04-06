@@ -6,6 +6,6 @@ use rome_js_syntax::{JsxTagExpression, JsxTagExpressionFields};
 impl ToFormatElement for JsxTagExpression {
     fn to_format_element(&self, formatter: &Formatter) -> FormatResult<FormatElement> {
         let JsxTagExpressionFields { tag } = self.as_fields();
-        Ok(tag.format(formatter)?)
+        tag.format(formatter)
     }
 }
